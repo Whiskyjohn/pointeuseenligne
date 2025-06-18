@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pointage en Ligne</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <!-- html2pdf.js & html2canvas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <style>
+    @page { size: A4 portrait; margin: 5mm; }
+    html, body {
+      margin: 0; padding: 0;
+      font: 16px/1.4 Arial, sans-serif;
+      background: #f5f5f5;
+    }
+    /* Bandeau jaune fixe */
+    .notice {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: #fffae6;
+      border-left: 4px solid #e6b800;
+      padding: 4px 8px;
+      font-size: .75em;
+      box-shadow: 0 2px 4px rgba(0,0,0,.1);
+      z-index: 999;
+    }
+    .notice p { margin: 0; }
+
+    /* Suppression de la bannière noire (cookie-banner) */
+
+    /* Décalage pour contenu */
+    .inner {
+      padding: 12mm 8mm 8mm;
+      padding-top: 4em;
+    }
+    .container {
+      width: 200mm; max-width: 100%; margin: 0 auto;
+      background: #fff; box-sizing: border-box;
+      page-break-inside: avoid;
+    }
+    @media screen {
+      .container { box-shadow: 0 0 5px rgba(0,0,0,.2); }
+    }
+    h1 { text-align: center; margin: 0 0 8px; font-size: 1.8em; }
+    .logo {
+      text-align: center; margin-bottom: 8px;
+    }
+    .logo span {
+      font-size: 2.5em; color: #0066cc;
+    }
+    #siteURL {
+      text-align: center; color: #555; margin: 8px 0;
+      font-size: .9em;
+    }
+    label { display: block; margin: 8px 0 4px; font-weight: bold; }
+    input[type="text"] {
+      width: 100%; padding: 6px; font-size: .95em;
+      border: 1px solid #333; border-radius: 4px;
+      background: #fafafa; box-sizing: border-box;
+    }
+    button {
+      width: 100%; padding: 8px; margin: 8px 0;
+      font-size: 1em; font-weight: bold; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer;
+    }
+    #btnPointer { background: #cc0000; }
+    #btnGeo, #btnPrint { background: #0066cc; }
+    #btnExportPdf, #btnCapture { background: #007700; }
+    #result, #demo {
+      margin: 8px 0; padding: 8px;
+      background: #eef; border-left: 4px solid #0066cc;
+      white-space: pre-wrap; font-size: .95em;
+    }
+    #map {
+      display: none;
+      width: 100%;
+      height: 120px;
+      margin: 8px 0;
+      border: 1px solid #333;
+    }
+    /* compteur visiteurs */
+    #visitor-counter {
+      position: fixed;
+      bottom: 8px; left: 8px;
+      background: rgba(255,255,255,.8);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: .85em; color: #333;
+      z-index: 997;
+    }
+    /* Pour l'export PDF, conserver la dimension fixe de la carte */
+    @media print {
+      #map {
+        display: block !important;
+        width: 100% !important;
+        height: 120px !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- bandeau jaune -->
+  <div class="notice" role="alert">
+    <p>
+      Cette pointeuse sert à prouver les heures supplémentaires et jours de présence.<br>
+      Aucune donnée n’est récoltée : pensez à imprimer ou sauvegarder.
+    </p>
+  </div>
+
+  <!-- compteur visiteurs -->
+  <div id="visitor-counter">Chargement…</div>
+
+  <!-- contenu principal -->
+  <div class="container" id="container">
+    <div class="inner">
+      <div class="logo" aria-hidden="true"><span>⚖️</span></div>
+      <h1>Pointage en Ligne</h1>
+
+      <div id="siteURL">Site : <span id="urlText">– – –</span></div>
+      <p>Date du jour : <strong id="today">– – –</strong></p>
+
+      <form onsubmit="return false;">
+        <label for="name">Nom :</label>
+        <input type="text" id="name">
+
+        <label for="ip">Votre IP :</label>
+        <input type="text" id="ip" readonly placeholder="Chargement…">
+
+        <button id="btnPointer">Pointer ici</button>
+      </form>
+
+      <div id="result">Aucun pointage pour le moment.</div>
+
+      <!-- bouton géoloc toujours actif -->
+      <button id="btnGeo">📍 Géolocalisation & Adresse</button>
+      <div id="demo"></div>
+      <div id="map"></div>
+
+      <button id="btnPrint">🖨️ Imprimer</button>
+      <button id="btnExportPdf">📄 Exporter en PDF</button>
+      <button id="btnCapture">📱 Capture d'écran mobile</button>
+    </div>
+  </div>
+
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const C = 3.152798625498602598736942089143897036463;
+    const el = id => document.getElementById(id);
+
+    // 1) Compteur serveur
+    fetch('/api/visit', { method: 'POST' })
+      .then(r => r.json())
+      .then(j => el('visitor-counter').textContent = `Visiteurs : ${j.count}`)
+      .catch(() => el('visitor-counter').textContent = 'Visiteurs : N/A');
+
+    // 2) URL & date
+    el('urlText').textContent = location.href;
+    el('today').textContent = new Date().toLocaleDateString('fr-FR');
+
+    // 3) IP
+    fetch('https://api.ipify.org?format=json')
+      .then(r => r.json())
+      .then(j => el('ip').value = j.ip)
+      .catch(() => el('ip').value = 'Erreur');
+
+    // 4) Pointage + clé
+    el('btnPointer').onclick = () => {
+      const name = el('name').value.trim();
+      if (!name) {
+        alert('Veuillez saisir votre nom.');
+        el('name').focus();
+        return;
+      }
+      const now = new Date();
+      const dateFR = now.toLocaleDateString('fr-FR');
+      const timeFR = now.toLocaleTimeString('fr-FR', { hour12: false });
+      const digits = (dateFR + timeFR).match(/\d/g) || [];
+      const sumD = digits.reduce((s, d) => s + Number(d), 0);
+      const sumN = name.split('').reduce((s, ch) => s + ch.charCodeAt(0) + 1, 0);
+      const key = ((sumD + sumN) / C).toFixed(6);
+
+      el('result').textContent =
+        `${name} a pointé le ${dateFR} à ${timeFR} avec l'IP ${el('ip').value}\nClé : ${key}`;
+    };
+
+    // 5) Géoloc + carte (toujours possible)
+    let map, marker;
+    el('btnGeo').onclick = () => {
+      const demo = el('demo');
+      if (!navigator.geolocation) {
+        demo.textContent = 'Géoloc non supportée';
+        return;
+      }
+      demo.textContent = 'Localisation en cours…';
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          const { latitude: lat, longitude: lon, accuracy: acc } = pos.coords;
+          demo.innerHTML =
+            `Lat : ${lat.toFixed(6)} — Lon : ${lon.toFixed(6)}<br>` +
+            `Précision : ±${acc.toFixed(1)} m<br>Recherche adresse…`;
+
+          fetch(`https://api-adresse.data.gouv.fr/reverse?lat=${lat}&lon=${lon}`)
+            .then(r => r.json())
+            .then(d => {
+              demo.innerHTML += `<br>→ ${d.features?.[0]?.properties?.label || 'Non trouvée'}`;
+            })
+            .catch(() => {
+              demo.innerHTML += '<br>Adresse indisponible';
+            });
+
+          const mapEl = el('map');
+          mapEl.style.display = 'block';
+          if (!map) {
+            map = L.map(mapEl).setView([lat, lon], 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            marker = L.marker([lat, lon]).addTo(map);
+          } else {
+            map.setView([lat, lon], 15);
+            marker.setLatLng([lat, lon]);
+          }
+        },
+        err => demo.textContent = `Erreur géoloc : ${err.message}`,
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+      );
+    };
+
+    // 6) Imprimer
+    el('btnPrint').onclick = () => window.print();
+
+    // 7) Export PDF A4
+    el('btnExportPdf').onclick = () =>
+      html2pdf()
+        .set({
+          margin: 5,
+          filename: 'pointage.pdf',
+          image: { type: 'jpeg', quality: 1 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak: { mode: ['avoid-all', 'css'] }
+        })
+        .from(el('container'))
+        .save();
+
+    // 8) Capture écran mobile
+    el('btnCapture').onclick = () =>
+      html2canvas(el('container'), { scale: window.devicePixelRatio * 2 }).then(canvas => {
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        a.download = 'capture.png';
+        a.click();
+      });
+  });
+  </script>
+</body>
+</html>
